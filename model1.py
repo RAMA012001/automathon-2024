@@ -14,7 +14,42 @@ import csv
 import timm
 import wandb
 import matplotlib.pyplot as plt
-from sklearn.metrics import f1_score
+import numpy as np
+
+
+def f1_score(true_labels, pred_labels):
+    """
+    Calculate the custom F1-score.
+
+    Parameters:
+    true_labels (list or array-like): The ground truth labels.
+    pred_labels (list or array-like): The predicted labels.
+
+    Returns:
+    float: The custom F1-score.
+    """
+    # Convert input lists to NumPy arrays
+    true_labels = np.array(true_labels)
+    pred_labels = np.array(pred_labels)
+    
+    # Calculate True Positives (TP)
+    TP = np.sum((true_labels == 1) & (pred_labels == 1))
+    
+    # Calculate False Positives (FP)
+    FP = np.sum((true_labels == 0) & (pred_labels == 1))
+    
+    # Calculate False Negatives (FN)
+    FN = np.sum((true_labels == 1) & (pred_labels == 0))
+    
+    # Calculate custom F1-score
+    denominator = 2 * TP + FP + FN
+    if denominator == 0:
+        return 0.0  # Avoid division by zero
+    else:
+        f1_score = (2 * TP) / denominator
+        return f1_score
+
+
 
 
 from PIL import Image
@@ -215,11 +250,12 @@ class VideoDataset(Dataset):
             return video, label, ID
 
 
-
-train_dataset = VideoDataset(dataset_dir, dataset_choice="train", nb_frames=nb_frames)
+dataset_dir='dataset_tensor'
+# train_dataset = VideoDataset(dataset_dir, dataset_choice="train", nb_frames=nb_frames)
 test_dataset = VideoDataset(dataset_dir, dataset_choice="test", nb_frames=nb_frames)
 experimental_dataset = VideoDataset(dataset_dir, dataset_choice="experimental", nb_frames=nb_frames)
-
+train_dataset = experimental_dataset
+print(f"Length of experimental_dataset: {len(experimental_dataset)}")
 
 # MODELE
 
@@ -238,11 +274,11 @@ class DeepfakeDetector(nn.Module):
 
 # LOGGING
 
-wandb.login(key="a446d513570a79c857317c3000584c5f6d6224f0")
+# wandb.login(key="a446d513570a79c857317c3000584c5f6d6224f0")
 
-run = wandb.init(
-    project="automathon"
-)
+# run = wandb.init(
+#     project="automathon"
+# )
 
 # ENTRAINEMENT
 
@@ -254,6 +290,7 @@ print("Training model:")
 summary(model, input_size=(batch_size, 3, 10, 256, 256))
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 epochs = 5
+print(f"Length of train_dataset: {len(train_dataset)}")
 loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 #loader = DataLoader(experimental_dataset, batch_size=2, shuffle=True)
 
@@ -274,18 +311,22 @@ for epoch in range(epochs):
         loss = loss_fn(label, label_pred)
         loss.backward()
         optimizer.step()
-        run.log({"loss": loss.item(), "epoch": epoch})
+        # run.log({"loss": loss.item(), "epoch": epoch})
+        print({"loss": loss.item(), "epoch": epoch})
         
         # Collect true and predicted labels
         pred = (label_pred > 0.5).long().cpu().detach().numpy()
         true_labels.extend(label.cpu().detach().numpy())
         pred_labels.extend(pred)
     
+    print('true_labels = ',len(true_labels))
+    print('pred_labels = ',len(pred_labels))
     # Calculate F1-score for training data
     train_f1 = f1_score(true_labels, pred_labels)
     train_f1_scores.append(train_f1)
+print(('f1 scores: ',train_f1_scores))
+print('train_f1 = ',sum(train_f1_scores)/len(train_f1_scores))
 
-print('train_f1 = ',sum(train_f1)/len(train_f1))
 
 ## TEST
 # test_f1_scores = []
@@ -297,21 +338,26 @@ print('train_f1 = ',sum(train_f1)/len(train_f1))
 # print("Testing...")
 # true_labels = []
 # pred_labels = []
+# try :
+#     for sample in tqdm(loader):
+#         X, ID = sample
+#         #ID = ID[0]
+#         X = X.to(device)
+#         label_pred = model(X)
+#         ids.extend(list(ID))
+#         pred = (label_pred > 0.5).long()
+#         pred = pred.cpu().detach().numpy().tolist()
+#         labels.extend(pred)
+# except:
+#     print('ID = ',ID)
 
-# for sample in tqdm(loader):
-#     X, label, ID = sample
-#     X = X.to(device)
-#     label = label.to(device)
-#     label_pred = model(X)
-    
-#     # Collect true and predicted labels
-#     pred = (label_pred > 0.5).long().cpu().detach().numpy()
-#     true_labels.extend(label.cpu().detach().numpy())
-#     pred_labels.extend(pred)
-
+# dataresults = pd.DataFrame({'pred':pred,'labels')
+# dataresults.to_csv('dataresults.csv')
 # # Calculate F1-score for test data
-# test_f1 = f1_score(true_labels, pred_labels)
+# test_f1 = f1_score(labels[:len(pred)], pred)
 # test_f1_scores.append(test_f1)
+# print('train_f1_score = ',np.mean(train_f1_scores))
+# print('test f1 score = ',test_f1)
 
 
 # ### ENREGISTREMENT
@@ -321,11 +367,7 @@ print('train_f1 = ',sum(train_f1)/len(train_f1))
 #     file.writelines(tests)
 
 
-
-# import matplotlib.pyplot as plt
-# import numpy as np
-
-# # Calculate average accuracy
+# Calculate average accuracy
 # average_train_f1 = np.mean(train_f1_scores)
 # average_test_f1 = np.mean(test_f1_scores)
 

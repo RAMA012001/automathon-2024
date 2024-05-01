@@ -14,11 +14,24 @@ import csv
 import timm
 import wandb
 import matplotlib.pyplot as plt
-from sklearn.metrics import f1_score
-
-
-from PIL import Image
+from torchvision.models import efficientnet_b0
 import torchvision.transforms.v2 as transforms
+
+def f1_score(true_labels, pred_labels):
+
+    # Calculate confusion matrix components
+    TP = sum((true_labels == 1) & (pred_labels == 1))
+    FP = sum((true_labels == 0) & (pred_labels == 1))
+    FN = sum((true_labels == 1) & (pred_labels == 0))
+    
+    # Calculate custom F1-score
+    if 2 * TP + FP + FN == 0:
+        return 0.0  # Avoid division by zero
+    else:
+        f1_score = (2 * TP) / (2 * TP + FP + FN)
+        return f1_score
+
+
 
 # UTILITIES
 
@@ -215,34 +228,60 @@ class VideoDataset(Dataset):
             return video, label, ID
 
 
-
-train_dataset = VideoDataset(dataset_dir, dataset_choice="train", nb_frames=nb_frames)
+dataset_dir='datasets'
+# train_dataset = VideoDataset(dataset_dir, dataset_choice="train", nb_frames=nb_frames)
 test_dataset = VideoDataset(dataset_dir, dataset_choice="test", nb_frames=nb_frames)
 experimental_dataset = VideoDataset(dataset_dir, dataset_choice="experimental", nb_frames=nb_frames)
-
+train_dataset = experimental_dataset
+print(f"Length of experimental_dataset: {len(experimental_dataset)}")
 
 # MODELE
 
 class DeepfakeDetector(nn.Module):
     def __init__(self, nb_frames=10):
-        super().__init__()
-        self.dense = nn.Linear(nb_frames*3*256*256,1)
-        self.flat = nn.Flatten()
+        super(DeepfakeDetector, self).__init__()
+        
+        # Load pre-trained EfficientNet-B0
+        self.efficientnet = efficientnet_b0(pretrained=True)
+        
+        # Remove the final classification layer of EfficientNet
+        self.efficientnet.classifier = nn.Identity()
+        
+        # Define your custom classification layers
+        # Flatten layer
+        self.flatten = nn.Flatten()
+        
+        # Fully connected layer for classification
+        # Calculate input size from EfficientNet and the number of frames
+        input_size = nb_frames * 3 * 224 * 224
+        
+        self.fc = nn.Linear(input_size, 1)
+        
+        # Activation function (Sigmoid for binary classification)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        y = self.flat(x)
-        y = self.dense(y)
-        y = self.sigmoid(y)
-        return y
+        # Pass input through EfficientNet feature extractor
+        features = self.efficientnet(x)
+        
+        # Flatten the features
+        features_flattened = self.flatten(features)
+        
+        # Pass flattened features through fully connected layer
+        logits = self.fc(features_flattened)
+        
+        # Apply sigmoid activation function
+        predictions = self.sigmoid(logits)
+        
+        return predictions
 
 # LOGGING
 
-wandb.login(key="a446d513570a79c857317c3000584c5f6d6224f0")
+# wandb.login(key="a446d513570a79c857317c3000584c5f6d6224f0")
 
-run = wandb.init(
-    project="automathon"
-)
+# run = wandb.init(
+#     project="automathon"
+# )
 
 # ENTRAINEMENT
 
@@ -254,6 +293,7 @@ print("Training model:")
 summary(model, input_size=(batch_size, 3, 10, 256, 256))
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 epochs = 5
+print(f"Length of train_dataset: {len(train_dataset)}")
 loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 #loader = DataLoader(experimental_dataset, batch_size=2, shuffle=True)
 
@@ -274,7 +314,8 @@ for epoch in range(epochs):
         loss = loss_fn(label, label_pred)
         loss.backward()
         optimizer.step()
-        run.log({"loss": loss.item(), "epoch": epoch})
+        # run.log({"loss": loss.item(), "epoch": epoch})
+        print({"loss": loss.item(), "epoch": epoch})
         
         # Collect true and predicted labels
         pred = (label_pred > 0.5).long().cpu().detach().numpy()
@@ -285,62 +326,61 @@ for epoch in range(epochs):
     train_f1 = f1_score(true_labels, pred_labels)
     train_f1_scores.append(train_f1)
 
-print('train_f1 = ',sum(train_f1)/len(train_f1))
 
 ## TEST
-# test_f1_scores = []
+test_f1_scores = []
 
-# loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-# model = model.to(device)
-# ids = []
-# labels = []
-# print("Testing...")
-# true_labels = []
-# pred_labels = []
+loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+model = model.to(device)
+ids = []
+labels = []
+print("Testing...")
+true_labels = []
+pred_labels = []
 
-# for sample in tqdm(loader):
-#     X, label, ID = sample
-#     X = X.to(device)
-#     label = label.to(device)
-#     label_pred = model(X)
+for sample in tqdm(loader):
+    X, label, ID = sample
+    X = X.to(device)
+    label = label.to(device)
+    label_pred = model(X)
     
-#     # Collect true and predicted labels
-#     pred = (label_pred > 0.5).long().cpu().detach().numpy()
-#     true_labels.extend(label.cpu().detach().numpy())
-#     pred_labels.extend(pred)
+    # Collect true and predicted labels
+    pred = (label_pred > 0.5).long().cpu().detach().numpy()
+    true_labels.extend(label.cpu().detach().numpy())
+    pred_labels.extend(pred)
 
-# # Calculate F1-score for test data
-# test_f1 = f1_score(true_labels, pred_labels)
-# test_f1_scores.append(test_f1)
-
-
-# ### ENREGISTREMENT
-# print("Saving...")
-# tests = ["id,label\n"] + [f"{ID},{label_pred[0]}\n" for ID, label_pred in zip(ids, labels)]
-# with open("submission.csv", "w") as file:
-#     file.writelines(tests)
+# Calculate F1-score for test data
+test_f1 = f1_score(true_labels, pred_labels)
+test_f1_scores.append(test_f1)
 
 
+### ENREGISTREMENT
+print("Saving...")
+tests = ["id,label\n"] + [f"{ID},{label_pred[0]}\n" for ID, label_pred in zip(ids, labels)]
+with open("submission.csv", "w") as file:
+    file.writelines(tests)
 
-# import matplotlib.pyplot as plt
-# import numpy as np
 
-# # Calculate average accuracy
-# average_train_f1 = np.mean(train_f1_scores)
-# average_test_f1 = np.mean(test_f1_scores)
 
-# # Create the plot
-# plt.figure(figsize=(8, 6))
-# plt.plot(range(epochs), train_f1_scores, label='Training F1-score')
-# plt.plot(range(len(test_f1_scores)), test_f1_scores, label='Test F1-score')
-# plt.xlabel('Epochs')
-# plt.ylabel('F1-score')
-# plt.title(f'Training and Test F1-score\n'
-#           f'Average Training F1: {average_train_f1:.3f}, Average Test F1: {average_test_f1:.3f}')
-# plt.legend()
+import matplotlib.pyplot as plt
+import numpy as np
 
-# # Save the plot to a file
-# plt.savefig('f1_score_plot.png')
+# Calculate average accuracy
+average_train_f1 = np.mean(train_f1_scores)
+average_test_f1 = np.mean(test_f1_scores)
 
-# # Display the plot
-# plt.show()
+# Create the plot
+plt.figure(figsize=(8, 6))
+plt.plot(range(epochs), train_f1_scores, label='Training F1-score')
+plt.plot(range(len(test_f1_scores)), test_f1_scores, label='Test F1-score')
+plt.xlabel('Epochs')
+plt.ylabel('F1-score')
+plt.title(f'Training and Test F1-score\n'
+          f'Average Training F1: {average_train_f1:.3f}, Average Test F1: {average_test_f1:.3f}')
+plt.legend()
+
+# Save the plot to a file
+plt.savefig('f1_score_plot2.png')
+
+# Display the plot
+plt.show()
